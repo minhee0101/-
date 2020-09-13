@@ -20,10 +20,6 @@ void loop() {
   delay(1000); // wait for 1,000 milliseconds
 }
 
-int toggle_state(int toggle) {
-  if (toggle == 0)
-  {
-    digitalWrite(PIN_LED, count);
-    delay(1000);
-  }
+int toggle_state(int toggle){
+   return (1-toggle);
 }
