@@ -11,7 +11,7 @@ void loop(){
   for(i=0; i<11; i++)
   {
     digitalWrite(7,!(digitalRead(7)));
-    delay(200);
+    delay(100);
   }
   i++;
   while(1) //infinite loop
