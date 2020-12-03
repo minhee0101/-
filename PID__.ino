@@ -10,31 +10,39 @@
 #define PIN_IR A0     // [3070] 적외선 센서를 아두이노 아날로그 A0핀에 연결
 
 // Framework setting
-#define _DIST_TARGET 155    // [2635] 목표하는 위치
-#define _DIST_MIN 100   //[3050] 거리의 최솟값이 100mm
+#define _DIST_TARGET 200    // [2635] 목표하는 위치
+#define _DIST_MIN 100  //[3050] 거리의 최솟값이 100mm
 #define _DIST_MAX 410                   //[3068] 거리의 최대값 410mm
 
 // Distance sensor
-#define _DIST_ALPHA 0.5   //[3054] 센서 보정정도
+#define _DIST_ALPHA 0.0  //[3054] 센서 보정정도
           // [3131] EMA필터값
-// Servo range
+// Servo ran
 #define _DUTY_MIN 1400    // [3052] 서보의 최소각도를 microseconds로 표현
 #define _DUTY_NEU 1600    // [3070] 레일플레이트 중립위치를 만드는 서보 duty값
 #define _DUTY_MAX 1800                //[3062] 서보의 최대각도의 microseconds의 값
 
 // Servo speed control
-#define _SERVO_ANGLE 20   // [3131] 최대 가동범위에 따른 목표 서보 회전각
-#define _SERVO_SPEED 30   //[3064]서보 속도를 30으로
+#define _SERVO_ANGLE 30   // [3131] 최대 가동범위에 따른 목표 서보 회전각
+#define _SERVO_SPEED 3000 //[3064]서보 속도를 30으로
 
 // Event periods
 #define _INTERVAL_DIST 20   // [2635] 적외선센서 업데이트 주기
 #define _INTERVAL_SERVO 20  // [2635] 서보 업데이트 주기
-#define _INTERVAL_SERIAL 100  // [3070] 시리얼 플로터 갱신 속도
+#define _INTERVAL_SERIAL 100 // [3070] 시리얼 플로터 갱신 속도
 
 // PID parameters
-#define _KP 5.0  // [2635] P 이득 비율(?)
+#define _KP 2.0  // [2635] P 이득 비율(?)
 #define _KI 0.0   // [2635] I 이득 비율
-#define _KD 0.0 // [2635] D 이득 비율
+#define _KD 25.0 // [2635] D 이득 비율
+
+//#define _INTERVAL_DIST 30  // DELAY_MICROS * samples_num^2 의 값이 최종 거리측정 인터벌임. 넉넉하게 30ms 잡음.
+#define DELAY_MICROS  1500 // 필터에 넣을 샘플값을 측정하는 딜레이(고정값!)
+#define EMA_ALPHA 0.35     // EMA 필터 값을 결정하는 ALPHA 값. 작성자가 생각하는 최적값임.
+float ema_dist=0;            // EMA 필터에 사용할 변수
+float filtered_dist;       // 최종 측정된 거리값을 넣을 변수. loop()안에 filtered_dist = filtered_ir_distance(); 형태로 사용하면 됨.
+float samples_num = 3;     // 스파이크 제거를 위한 부분필터에 샘플을 몇개 측정할 것인지. 3개로 충분함! 가능하면 수정하지 말 것.
+
 
 
 //////////////////////
@@ -68,21 +76,25 @@ void setup() {
 // initialize GPIO pins for LED and attach servo 
   pinMode(PIN_LED, OUTPUT); //[3062] 핀 LED 활성화
   myservo.attach(PIN_SERVO); // [3070] 서보 구동을 위한 서보 초기화
+  
 // initialize global variables
-duty_target, duty_curr = _DIST_MIN; // [3055] duty_target, duty_curr 초기화
+duty_target, duty_curr = _DUTY_MIN; // [3055] duty_target, duty_curr 초기화
 last_sampling_time_dist, last_sampling_time_servo, last_sampling_time_serial = 0;
+
 // [3055] 샘플링 타임 변수 초기화
-dist_raw, dist_ema = _DIST_MIN; // [3055] dist 변수 초기화
-pterm = iterm = dterm = 0; // [2635] pid 제어값에서 우선 p 만 사용하도록
+error_prev, error_curr = _DUTY_NEU; //error 값 초기화??? 
+dist_raw, dist_ema  = _DIST_MIN; // [3055] dist 변수 초기화
+pterm = dterm = iterm = 0; // [2635] pid 제어값에서 우선 p 만 사용하도록
 
 // move servo to neutral position
-  myservo.writeMicroseconds(_DUTY_NEU); //[2635]
+  myservo.writeMicroseconds(_DUTY_NEU);//[2635]
 
 // initialize serial port
   Serial.begin(57600); //[2635]
 
 // convert angle speed into duty change per interval.
-  duty_chg_per_interval = (_DUTY_MAX - _DUTY_MIN)/(float)(_SERVO_ANGLE) * (_SERVO_SPEED /1000.0)*_INTERVAL_SERVO;    // [3131] 설정한 서보 스피드에 따른 duty change per interval 값을 변환
+  duty_chg_per_interval = (_DUTY_MAX - _DUTY_MIN)/(float)(_SERVO_ANGLE) * (_SERVO_SPEED /1000.0)*_INTERVAL_SERVO; 
+  // [3131] 설정한 서보 스피드에 따른 duty change per interval 값을 변환
 
 }
   
@@ -92,6 +104,8 @@ void loop() {
     /////////////////////
     // Event generator //
     /////////////////////
+
+    
     unsigned long time_curr = millis(); // [3070] 이벤트 업데이트 주기 계산을 위한 현재 시간
     // [3070] 이벤트 주기가 돌아올때까지 현재시간과 비교하며 기다리도록 함.
     if(time_curr >= last_sampling_time_dist + _INTERVAL_DIST) {
@@ -112,21 +126,26 @@ void loop() {
     ////////////////////
 
     if(event_dist) {
-        event_dist = false; // [2635] 업데이트 대기
+        event_dist = false; // [2635] 업데이트 대기distance
         // get a distance reading from the distance sensor
-        dist_raw = ir_distance_filtered(); // [2635] 센서 값 받아와서 변수에 저장
-        dist_ema = _DIST_ALPHA * dist_raw + (1 - _DIST_ALPHA) * dist_ema; 
+        dist_raw = filtered_ir_distance(); // [2635] 센서 값 받아와서 변수에 저장
+        //dist_ema = _DIST_ALPHA * dist_raw + (1 - _DIST_ALPHA) * dist_ema; 
         // [3055] dist_ema 설정
+        //filtered_dist = filtered_ir_distance();
 
         // PID control logic
         error_curr = _DIST_TARGET - dist_raw; // [2635] 오차 계산
-        pterm = error_curr; // [2635] p값은 오차
-        control = _KP * pterm + _KI * iterm +  _KD * dterm; // [2635] control 값, i와 d는 현재 0
-
-        // duty_target = f(duty_neutral, control)
-        duty_target = _DUTY_NEU * (1 + control); // [3070] control 값이 다 합해서 1이 되도록 되어있다면, 중립 위치에 컨트롤 값 만큼의 비율을 더해 목표위치를 정한다.
-         // [2635] NEU 에다가 위아래로 control 에 맞게 조절한 값?
-
+        pterm = _KP * error_curr; // [2635] p값은 오차
+        dterm = _KD * (error_curr - error_prev);
+        //control = _KP * pterm + _KI * iterm +  _KD * dterm; // [2635] control 값, i와 d는 현재 0
+        control = pterm + dterm;
+        //duty_target = f(duty_neutral, control)
+        //duty_target = _DUTY_NEU * (1 + control); // [3070] control 값이 다 합해서 1이 되도록 되어있다면, 중립 위치에 컨트롤 값 만큼의 비율을 더해 목표위치를 정한다.
+        // [2635] NEU 에다가 위아래로 control 에 맞게 조절한 값?
+        duty_target = _DUTY_NEU + control;
+        
+        
+        
   // keep duty_target value within the range of [_DUTY_MIN, _DUTY_MAX]
         if(duty_target < _DUTY_MIN)  // [2635] 양극값 넘어가는 경우 극값으로 제한
         {
@@ -136,6 +155,8 @@ void loop() {
         {
             duty_target = _DUTY_MAX;
         }
+
+        error_prev = error_curr;
   }
   
     if(event_servo) {
@@ -162,6 +183,8 @@ void loop() {
     Serial.print(dist_raw);
     Serial.print(",pterm:");
     Serial.print(map(pterm,-1000,1000,510,610));
+    Serial.print(",dterm:");
+    Serial.print(map(dterm,-1000,1000,510,610));
     Serial.print(",duty_target:");
     Serial.print(map(duty_target,1000,2000,410,510));
     Serial.print(",duty_curr:");
@@ -178,7 +201,33 @@ float ir_distance(void){ // return value unit: mm
     val = ((6762.0/(volt - 9.0)) - 4.0) * 10.0; // [3055] volt 값 보정
     return val; // [3055] val 리턴
 }
-
-float ir_distance_filtered(void){ // return value unit: mm
-  return ir_distance(); // for now, just use ir_distance() without noise filter.
+float under_noise_filter(void){ // 아래로 떨어지는 형태의 스파이크를 제거해주는 필터
+  int currReading;
+  int largestReading = 0;
+  for (int i = 0; i < samples_num; i++) {
+    currReading = ir_distance();
+    if (currReading > largestReading) { largestReading = currReading; }
+    // Delay a short time before taking another reading
+    delayMicroseconds(DELAY_MICROS);
+  }
+  return largestReading;
 }
+
+float filtered_ir_distance(void){ // 아래로 떨어지는 형태의 스파이크를 제거 후, 위로 치솟는 스파이크를 제거하고 EMA필터를 적용함.
+  // under_noise_filter를 통과한 값을 upper_nosie_filter에 넣어 최종 값이 나옴.
+  int currReading;
+  int lowestReading = 1024;
+  for (int i = 0; i < samples_num; i++) {
+    currReading = under_noise_filter();
+    if (currReading < lowestReading) { lowestReading = currReading; }
+  }
+  // eam 필터 추가
+  ema_dist = EMA_ALPHA*lowestReading + (1-EMA_ALPHA)*ema_dist;
+  return ema_dist;
+}
+//===================================================
+
+
+/* float ir_distance_filtered(void){ // return value unit: mm
+  return ir_distance(); // for now, just use ir_distance() without noise filter.
+} */
