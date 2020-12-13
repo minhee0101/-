@@ -32,8 +32,8 @@
 #define _INTERVAL_SERIAL 100 // [3070] 시리얼 플로터 갱신 속도
 
 // PID parameters
-#define _KP 1 // [2635] P 이득 비율(?)
-#define _KI 0.003 // [2635] I 이득 비율
+#define _KP 2 // [2635] P 이득 비율(?)
+#define _KI 0.0013 // [2635] I 이득 비율
 #define _KD 20.0 // [2635] D 이득 비율
 
 //iterm 최대최소
